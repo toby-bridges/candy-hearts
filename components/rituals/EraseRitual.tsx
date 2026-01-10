@@ -1,8 +1,7 @@
 'use client'
 
-import { useRef, useState, useEffect } from 'react'
-import { motion } from 'framer-motion'
-import { applyEraseEffect } from '@/lib/ritualEffects'
+import { useRef, useState, useEffect, useCallback } from 'react'
+import { motion, AnimatePresence } from 'framer-motion'
 import { loadImage } from '@/lib/imageUtils'
 
 interface EraseRitualProps {
@@ -10,18 +9,28 @@ interface EraseRitualProps {
   onComplete: (resultImage: string) => void
 }
 
-interface BlurPoint {
+interface Particle {
+  id: number
   x: number
   y: number
+  size: number
+  color: string
+  delay: number
+  duration: number
+  targetX: number
+  targetY: number
 }
 
 export default function EraseRitual({ image, onComplete }: EraseRitualProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const containerRef = useRef<HTMLDivElement>(null)
-  const [blurPoints, setBlurPoints] = useState<BlurPoint[]>([])
+  const [particles, setParticles] = useState<Particle[]>([])
+  const [isAnimating, setIsAnimating] = useState(false)
   const [isProcessing, setIsProcessing] = useState(false)
   const [imageSize, setImageSize] = useState({ width: 0, height: 0 })
   const [displaySize, setDisplaySize] = useState({ width: 0, height: 0 })
+  const [clickedAreas, setClickedAreas] = useState<Array<{ x: number; y: number }>>([])
+  const [showHint, setShowHint] = useState(true)
 
   // 初始化画布
   useEffect(() => {
@@ -33,7 +42,6 @@ export default function EraseRitual({ image, onComplete }: EraseRitualProps) {
       const container = containerRef.current
       if (!canvas || !container) return
 
-      // 计算显示尺寸（适应容器）
       const maxWidth = container.clientWidth
       const maxHeight = window.innerHeight * 0.5
       let displayWidth = img.width
@@ -49,12 +57,9 @@ export default function EraseRitual({ image, onComplete }: EraseRitualProps) {
       }
 
       setDisplaySize({ width: displayWidth, height: displayHeight })
-
-      // 设置画布尺寸
       canvas.width = displayWidth
       canvas.height = displayHeight
 
-      // 绘制图片
       const ctx = canvas.getContext('2d')!
       ctx.drawImage(img, 0, 0, displayWidth, displayHeight)
     }
@@ -62,8 +67,51 @@ export default function EraseRitual({ image, onComplete }: EraseRitualProps) {
     initCanvas()
   }, [image])
 
-  // 处理点击
-  const handleClick = (e: React.MouseEvent<HTMLCanvasElement> | React.TouchEvent<HTMLCanvasElement>) => {
+  // 生成蒲公英粒子
+  const generateDandelionParticles = useCallback((
+    ctx: CanvasRenderingContext2D,
+    centerX: number,
+    centerY: number,
+    radius: number
+  ): Particle[] => {
+    const newParticles: Particle[] = []
+    const particleCount = 60 // 粒子数量
+
+    for (let i = 0; i < particleCount; i++) {
+      // 在圆形区域内随机位置
+      const angle = Math.random() * Math.PI * 2
+      const distance = Math.random() * radius
+      const x = centerX + Math.cos(angle) * distance
+      const y = centerY + Math.sin(angle) * distance
+
+      // 获取该位置的颜色
+      const pixel = ctx.getImageData(Math.floor(x), Math.floor(y), 1, 1).data
+      const color = `rgba(${pixel[0]}, ${pixel[1]}, ${pixel[2]}, 0.8)`
+
+      // 蒲公英飘散方向：主要向上，带有随机水平偏移
+      const targetX = x + (Math.random() - 0.5) * 300
+      const targetY = y - 150 - Math.random() * 200 // 向上飘
+
+      newParticles.push({
+        id: Date.now() + i,
+        x,
+        y,
+        size: 3 + Math.random() * 5,
+        color,
+        delay: Math.random() * 0.8, // 随机延迟，产生飘散感
+        duration: 1.5 + Math.random() * 1, // 随机时长
+        targetX,
+        targetY,
+      })
+    }
+
+    return newParticles
+  }, [])
+
+  // 处理点击 - 生成蒲公英效果
+  const handleClick = async (e: React.MouseEvent<HTMLCanvasElement> | React.TouchEvent<HTMLCanvasElement>) => {
+    if (isAnimating) return
+
     const canvas = canvasRef.current
     if (!canvas) return
 
@@ -78,39 +126,87 @@ export default function EraseRitual({ image, onComplete }: EraseRitualProps) {
       clientY = e.clientY
     }
 
-    // 显示坐标
     const displayX = clientX - rect.left
     const displayY = clientY - rect.top
+    const radius = Math.max(displaySize.width * 0.1, 40)
 
-    // 转换为实际图片坐标
-    const scaleX = imageSize.width / displaySize.width
-    const scaleY = imageSize.height / displaySize.height
-    const actualX = displayX * scaleX
-    const actualY = displayY * scaleY
+    setShowHint(false)
+    setIsAnimating(true)
 
-    // 添加模糊点
-    const newPoint = { x: actualX, y: actualY }
-    setBlurPoints([...blurPoints, newPoint])
-
-    // 在画布上显示预览
-    const ctx = canvas.getContext('2d')!
-    const radius = Math.max(displaySize.width * 0.08, 30)
-
-    // 绘制模糊预览圆
-    ctx.beginPath()
-    ctx.arc(displayX, displayY, radius, 0, Math.PI * 2)
-    ctx.fillStyle = 'rgba(212, 181, 160, 0.6)' // 抹除色
-    ctx.fill()
-
-    // 添加触感反馈
+    // 触感反馈
     if (navigator.vibrate) {
       navigator.vibrate(30)
     }
+
+    const ctx = canvas.getContext('2d')!
+
+    // 生成粒子
+    const newParticles = generateDandelionParticles(ctx, displayX, displayY, radius)
+    setParticles(newParticles)
+
+    // 记录点击区域（用于最终图片处理）
+    const scaleX = imageSize.width / displaySize.width
+    const scaleY = imageSize.height / displaySize.height
+    setClickedAreas([...clickedAreas, {
+      x: displayX * scaleX,
+      y: displayY * scaleY
+    }])
+
+    // 在画布上柔和地模糊该区域
+    setTimeout(() => {
+      softBlurArea(ctx, displayX, displayY, radius)
+    }, 800)
+
+    // 动画结束后清除粒子
+    setTimeout(() => {
+      setParticles([])
+      setIsAnimating(false)
+    }, 3000)
+  }
+
+  // 柔和模糊区域
+  const softBlurArea = (
+    ctx: CanvasRenderingContext2D,
+    centerX: number,
+    centerY: number,
+    radius: number
+  ) => {
+    // 创建临时画布进行模糊
+    const tempCanvas = document.createElement('canvas')
+    tempCanvas.width = ctx.canvas.width
+    tempCanvas.height = ctx.canvas.height
+    const tempCtx = tempCanvas.getContext('2d')!
+
+    // 复制当前画布
+    tempCtx.drawImage(ctx.canvas, 0, 0)
+
+    // 在原画布上绘制模糊效果
+    ctx.save()
+
+    // 创建圆形裁剪区域
+    ctx.beginPath()
+    ctx.arc(centerX, centerY, radius, 0, Math.PI * 2)
+    ctx.clip()
+
+    // 应用模糊
+    ctx.filter = 'blur(20px)'
+    ctx.drawImage(tempCanvas, 0, 0)
+    ctx.filter = 'none'
+
+    // 叠加柔和的暖色调
+    ctx.fillStyle = 'rgba(253, 248, 243, 0.3)'
+    ctx.fillRect(centerX - radius, centerY - radius, radius * 2, radius * 2)
+
+    ctx.restore()
   }
 
   // 重来
   const handleReset = async () => {
-    setBlurPoints([])
+    setParticles([])
+    setClickedAreas([])
+    setIsAnimating(false)
+    setShowHint(true)
+
     const canvas = canvasRef.current
     if (!canvas) return
 
@@ -122,18 +218,17 @@ export default function EraseRitual({ image, onComplete }: EraseRitualProps) {
 
   // 完成
   const handleConfirm = async () => {
-    if (blurPoints.length === 0) {
-      // 没有选择任何区域，提示用户
-      return
-    }
+    if (clickedAreas.length === 0) return
 
     setIsProcessing(true)
-    try {
-      const result = await applyEraseEffect(image, blurPoints)
-      onComplete(result)
-    } catch (error) {
-      console.error('抹除处理失败:', error)
+
+    // 直接使用当前画布状态作为结果
+    const canvas = canvasRef.current
+    if (canvas) {
+      const resultImage = canvas.toDataURL('image/jpeg', 0.9)
+      onComplete(resultImage)
     }
+
     setIsProcessing(false)
   }
 
@@ -150,31 +245,81 @@ export default function EraseRitual({ image, onComplete }: EraseRitualProps) {
         animate={{ opacity: 1, y: 0 }}
         className="text-center text-ritual-muted text-sm mb-4"
       >
-        点击你想模糊的地方
+        轻触他，让他随风而去
       </motion.p>
 
       {/* 画布容器 */}
-      <div ref={containerRef} className="card-ritual overflow-hidden">
+      <div ref={containerRef} className="card-ritual overflow-hidden relative">
         <canvas
           ref={canvasRef}
           onClick={handleClick}
           onTouchEnd={handleClick}
-          className="w-full cursor-crosshair"
+          className="w-full cursor-pointer"
           style={{
             width: displaySize.width || '100%',
             height: displaySize.height || 'auto',
           }}
         />
+
+        {/* 蒲公英粒子动画 */}
+        <AnimatePresence>
+          {particles.map((particle) => (
+            <motion.div
+              key={particle.id}
+              initial={{
+                x: particle.x,
+                y: particle.y,
+                scale: 1,
+                opacity: 1,
+              }}
+              animate={{
+                x: particle.targetX,
+                y: particle.targetY,
+                scale: 0,
+                opacity: 0,
+              }}
+              transition={{
+                duration: particle.duration,
+                delay: particle.delay,
+                ease: [0.25, 0.46, 0.45, 0.94], // 柔和的缓动
+              }}
+              className="absolute pointer-events-none"
+              style={{
+                width: particle.size,
+                height: particle.size,
+                borderRadius: '50%',
+                backgroundColor: particle.color,
+                boxShadow: `0 0 ${particle.size}px ${particle.color}`,
+                left: 0,
+                top: 0,
+              }}
+            />
+          ))}
+        </AnimatePresence>
+
+        {/* 首次点击提示 */}
+        {showHint && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="absolute inset-0 flex items-center justify-center bg-black/10 pointer-events-none"
+          >
+            <div className="bg-white/90 px-4 py-2 rounded-full text-ritual-muted text-sm">
+              👆 轻触想要消散的地方
+            </div>
+          </motion.div>
+        )}
       </div>
 
-      {/* 已选择的点数 */}
-      {blurPoints.length > 0 && (
+      {/* 已处理提示 */}
+      {clickedAreas.length > 0 && !isAnimating && (
         <motion.p
           initial={{ opacity: 0 }}
           animate={{ opacity: 1 }}
-          className="text-center text-ritual-muted text-xs mt-2"
+          className="text-center text-ritual-erase text-xs mt-2"
         >
-          已选择 {blurPoints.length} 个区域
+          ✨ 已随风飘散 {clickedAreas.length} 处
         </motion.p>
       )}
 
@@ -183,7 +328,7 @@ export default function EraseRitual({ image, onComplete }: EraseRitualProps) {
         <motion.button
           whileTap={{ scale: 0.95 }}
           onClick={handleReset}
-          disabled={isProcessing}
+          disabled={isProcessing || isAnimating}
           className="flex-1 py-3 px-4 rounded-ritual border border-ritual-border text-ritual-muted"
         >
           重来
@@ -191,10 +336,10 @@ export default function EraseRitual({ image, onComplete }: EraseRitualProps) {
         <motion.button
           whileTap={{ scale: 0.95 }}
           onClick={handleConfirm}
-          disabled={isProcessing || blurPoints.length === 0}
+          disabled={isProcessing || isAnimating || clickedAreas.length === 0}
           className={`
             flex-1 py-3 px-4 rounded-ritual font-medium
-            ${blurPoints.length > 0
+            ${clickedAreas.length > 0 && !isAnimating
               ? 'bg-ritual-erase text-white'
               : 'bg-ritual-card text-ritual-muted'}
           `}
