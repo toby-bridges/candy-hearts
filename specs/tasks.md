@@ -21,6 +21,16 @@
 
 **Purpose**: Next.js 项目骨架搭建
 
+- [x] **T000** 创建 README.md 项目文档
+  - 项目介绍和核心理念
+  - 三个版本说明（主版本/蒲公英/复仇者）
+  - 技术栈和本地运行指南
+  - 部署链接
+  - 设计美学说明
+  - **DoD**: README 在 GitHub 上可见
+  - **Time**: 5min
+  - **Status**: ✅ 已完成并部署到所有分支
+
 - [ ] **T001** 创建 Next.js 项目
   ```bash
   npx create-next-app@latest breakup-photo-ritual --typescript --tailwind --app --src-dir=false
